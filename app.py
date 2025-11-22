@@ -13,13 +13,31 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is not set")
 
+# Global variables for connection management
+_client: MongoClient = None
+_database: Database = None
+
 def get_database() -> Database:
-    """Create MongoDB connection and return database"""
-    client = MongoClient(MONGODB_URI)
-    db_name = MONGODB_URI.split("/")[-1].split("?")[0]
-    if not db_name or db_name == "":
-        db_name = "futebol_app"
-    return client[db_name]
+    """Get MongoDB database (singleton pattern)"""
+    global _client, _database
+
+    if _database is None:
+        _client = MongoClient(MONGODB_URI)
+        db_name = MONGODB_URI.split("/")[-1].split("?")[0]
+        if not db_name or db_name == "":
+            db_name = "futebol_app"
+        _database = _client[db_name]
+
+    return _database
+
+def close_database() -> None:
+    """Close MongoDB connection"""
+    global _client, _database
+
+    if _client is not None:
+        _client.close()
+        _client = None
+        _database = None
 
 def get_next_id(db: Database, collection_name: str) -> int:
     """Get next auto-increment ID for a collection"""
@@ -774,6 +792,7 @@ def menu_principal() -> None:
             menu_consultas()
         elif opcao == "0":
             print("\n👋 Até logo!")
+            close_database()
             sys.exit(0)
         else:
             print("❌ Opção inválida!")
@@ -789,6 +808,8 @@ def main() -> None:
     except Exception as e:
         print(f"\n❌ Erro fatal: {e}")
         sys.exit(1)
+    finally:
+        close_database()
 
 if __name__ == "__main__":
     main()
