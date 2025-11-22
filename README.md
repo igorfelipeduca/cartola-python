@@ -4,13 +4,13 @@ Sistema de gerenciamento de times de futebol com usuários, jogadores e times of
 
 ## Estrutura do Banco de Dados
 
-O banco contém as seguintes tabelas:
+O banco MongoDB contém as seguintes coleções:
 
-- **USUARIO**: Cadastro de usuários do sistema
-- **TIME_OFICIAL**: Times oficiais de futebol
-- **JOGADOR**: Jogadores vinculados aos times oficiais
-- **TIME_USUARIO**: Times criados pelos usuários
-- **TIME_USUARIO_JOGADOR**: Relação entre times de usuário e jogadores
+- **usuario**: Cadastro de usuários do sistema
+- **time_oficial**: Times oficiais de futebol
+- **jogador**: Jogadores vinculados aos times oficiais
+- **time_usuario**: Times criados pelos usuários
+- **time_usuario_jogador**: Relação entre times de usuário e jogadores
 
 ## Como usar
 
@@ -22,9 +22,25 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configurar o banco de dados (primeira vez)
+### 2. Configurar variáveis de ambiente
 
-Execute este comando apenas na primeira vez para criar as tabelas e inserir dados iniciais:
+Copie o arquivo `.env.example` para `.env` e configure sua conexão MongoDB:
+
+```bash
+cp .env.example .env
+```
+
+Edite o arquivo `.env` e configure a variável `MONGODB_URI`:
+
+```
+MONGODB_URI=mongodb://username:password@host:port/database
+# Ou para MongoDB Atlas:
+# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database
+```
+
+### 3. Configurar o banco de dados (primeira vez)
+
+Execute este comando apenas na primeira vez para criar as coleções e inserir dados iniciais:
 
 ```bash
 python setup_database.py
@@ -32,11 +48,12 @@ python setup_database.py
 
 Este script irá:
 - Criar o banco de dados `futebol_app`
-- Criar todas as tabelas necessárias
+- Criar todas as coleções necessárias
+- Criar índices únicos para email e sigla
 - Inserir dados de teste
 - Executar 5 queries de leitura
 
-### 3. Executar o aplicativo interativo
+### 4. Executar o aplicativo interativo
 
 Para usar o sistema completo com interface de terminal:
 
@@ -67,11 +84,19 @@ O aplicativo oferece um menu interativo com as seguintes opções:
 
 ## Arquivos do Projeto
 
-- `script.sql` - Script SQL original com a estrutura do banco
-- `setup_database.py` - Script para inicializar o banco com dados de teste
+- `script.sql` - Script SQL original (legado - MySQL)
+- `script.js` - Script MongoDB Shell com a estrutura do banco
+- `setup_database.py` - Script Python para inicializar o banco com dados de teste
 - `app.py` - Aplicativo interativo de terminal
+- `reset.py` - Script para limpar todas as coleções do banco
 - `requirements.txt` - Dependências do projeto
+- `.env.example` - Exemplo de configuração de variáveis de ambiente
 
 ## Conexão com o Banco
 
-O sistema está configurado para conectar ao banco MySQL hospedado no Railway. A URL de conexão está definida nos arquivos `setup_database.py` e `app.py`.
+O sistema utiliza MongoDB. Configure a URI de conexão no arquivo `.env` usando a variável `MONGODB_URI`.
+
+Exemplos:
+- MongoDB local: `mongodb://localhost:27017/futebol_app`
+- MongoDB Atlas: `mongodb+srv://user:pass@cluster.mongodb.net/futebol_app`
+- MongoDB hospedado: `mongodb://user:pass@host:port/futebol_app`

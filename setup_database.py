@@ -1,5 +1,5 @@
-import pymysql
-from pymysql import Connection
+from pymongo import MongoClient
+from pymongo.database import Database
 from typing import List, Tuple, Any
 import sys
 import os
@@ -7,263 +7,332 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is not set")
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI environment variable is not set")
 
-def parse_database_url(url: str) -> dict[str, Any]:
-    """Parse MySQL connection URL"""
-    url = url.replace("mysql://", "")
-
-    auth, host_port_db = url.split("@")
-    user, password = auth.split(":")
-
-    host_port, database = host_port_db.rsplit("/", 1)
-    host, port = host_port.split(":")
-
-    return {
-        "host": host,
-        "port": int(port),
-        "user": user,
-        "password": password,
-        "database": database
-    }
-
-def get_connection(use_database: bool = True) -> Connection:
-    """Create MySQL connection"""
-    config = parse_database_url(DATABASE_URL)
-
-    if not use_database:
-        config.pop("database")
-
-    return pymysql.connect(**config)
+def get_database() -> Database:
+    """Create MongoDB connection and return database"""
+    client = MongoClient(MONGODB_URI)
+    db_name = MONGODB_URI.split("/")[-1].split("?")[0]
+    if not db_name or db_name == "":
+        db_name = "futebol_app"
+    return client[db_name]
 
 def execute_ddl() -> None:
-    """Execute DDL statements to create database and tables"""
-    print("=== Criando banco de dados e tabelas ===\n")
+    """Drop existing collections and create new ones"""
+    print("=== Criando banco de dados e coleções ===\n")
 
-    conn = get_connection(use_database=False)
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("CREATE DATABASE IF NOT EXISTS futebol_app DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci")
-        cursor.execute("USE futebol_app")
+        # Drop collections if they exist
+        db.time_usuario_jogador.drop()
+        db.time_usuario.drop()
+        db.jogador.drop()
+        db.time_oficial.drop()
+        db.usuario.drop()
 
-        cursor.execute("DROP TABLE IF EXISTS TIME_USUARIO_JOGADOR")
-        cursor.execute("DROP TABLE IF EXISTS TIME_USUARIO")
-        cursor.execute("DROP TABLE IF EXISTS JOGADOR")
-        cursor.execute("DROP TABLE IF EXISTS TIME_OFICIAL")
-        cursor.execute("DROP TABLE IF EXISTS USUARIO")
+        # Create collections (they'll be created automatically on first insert, but we can create them explicitly)
+        db.create_collection("usuario")
+        db.create_collection("time_oficial")
+        db.create_collection("jogador")
+        db.create_collection("time_usuario")
+        db.create_collection("time_usuario_jogador")
 
-        cursor.execute("""
-            CREATE TABLE USUARIO (
-              id              INT AUTO_INCREMENT PRIMARY KEY,
-              nome            VARCHAR(120)        NOT NULL,
-              email           VARCHAR(160)        NOT NULL UNIQUE,
-              senha           VARCHAR(255)        NOT NULL,
-              sexo            ENUM('M','F','O')   NOT NULL,
-              telefone        VARCHAR(20),
-              data_nascimento DATE                NOT NULL,
-              time_preferido  VARCHAR(80)
-            )
-        """)
+        # Create indexes for unique constraints and performance
+        db.usuario.create_index("email", unique=True)
+        db.time_oficial.create_index("sigla", unique=True)
+        db.time_usuario_jogador.create_index([("time_usuario_id", 1), ("jogador_id", 1)], unique=True)
 
-        cursor.execute("""
-            CREATE TABLE TIME_OFICIAL (
-              id     INT AUTO_INCREMENT PRIMARY KEY,
-              nome   VARCHAR(120) NOT NULL,
-              sigla  VARCHAR(10)  NOT NULL UNIQUE
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE JOGADOR (
-              id      INT AUTO_INCREMENT PRIMARY KEY,
-              nome    VARCHAR(120) NOT NULL,
-              posicao VARCHAR(40)  NOT NULL,
-              time_id INT,
-              CONSTRAINT fk_jog_time
-                FOREIGN KEY (time_id) REFERENCES TIME_OFICIAL(id)
-                ON UPDATE CASCADE ON DELETE SET NULL
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE TIME_USUARIO (
-              id         INT AUTO_INCREMENT PRIMARY KEY,
-              nome       VARCHAR(120) NOT NULL,
-              usuario_id INT          NOT NULL,
-              CONSTRAINT fk_timeuser_user
-                FOREIGN KEY (usuario_id) REFERENCES USUARIO(id)
-                ON UPDATE CASCADE ON DELETE CASCADE
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE TIME_USUARIO_JOGADOR (
-              id              INT AUTO_INCREMENT PRIMARY KEY,
-              time_usuario_id INT NOT NULL,
-              jogador_id      INT NOT NULL,
-              CONSTRAINT fk_tuj_timeuser FOREIGN KEY (time_usuario_id) REFERENCES TIME_USUARIO(id)
-                ON UPDATE CASCADE ON DELETE CASCADE,
-              CONSTRAINT fk_tuj_jog FOREIGN KEY (jogador_id) REFERENCES JOGADOR(id)
-                ON UPDATE CASCADE ON DELETE CASCADE,
-              CONSTRAINT uq_tuj UNIQUE (time_usuario_id, jogador_id)
-            )
-        """)
-
-        conn.commit()
-        print("✓ Banco de dados e tabelas criados com sucesso\n")
+        print("✓ Banco de dados e coleções criados com sucesso\n")
 
     except Exception as e:
         print(f"✗ Erro ao criar banco de dados: {e}")
-        conn.rollback()
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 def insert_test_data() -> None:
-    """Insert test data into tables"""
+    """Insert test data into collections"""
     print("=== Inserindo dados de teste ===\n")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("USE futebol_app")
+        # Insert usuarios
+        usuarios = [
+            {
+                "_id": 1,
+                "nome": "Eduardo Fontes",
+                "email": "edu@example.com",
+                "senha": "hash_senha",
+                "sexo": "M",
+                "telefone": "77-99122-9637",
+                "data_nascimento": "2000-08-25",
+                "time_preferido": "FURIA"
+            },
+            {
+                "_id": 2,
+                "nome": "Larissa",
+                "email": "lari@example.com",
+                "senha": "hash",
+                "sexo": "F",
+                "telefone": None,
+                "data_nascimento": "2001-03-10",
+                "time_preferido": "LOUD"
+            }
+        ]
+        db.usuario.insert_many(usuarios)
 
-        cursor.executemany("""
-            INSERT INTO USUARIO (nome, email, senha, sexo, telefone, data_nascimento, time_preferido)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, [
-            ('Eduardo Fontes', 'edu@example.com', 'hash_senha', 'M', '77-99122-9637', '2000-08-25', 'FURIA'),
-            ('Larissa', 'lari@example.com', 'hash', 'F', None, '2001-03-10', 'LOUD')
-        ])
+        # Insert times oficiais
+        times_oficiais = [
+            {"_id": 1, "nome": "Furia Esports", "sigla": "FUR"},
+            {"_id": 2, "nome": "LOUD", "sigla": "LOD"}
+        ]
+        db.time_oficial.insert_many(times_oficiais)
 
-        cursor.executemany("""
-            INSERT INTO TIME_OFICIAL (nome, sigla) VALUES (%s, %s)
-        """, [
-            ('Furia Esports', 'FUR'),
-            ('LOUD', 'LOD')
-        ])
+        # Insert jogadores
+        jogadores = [
+            {"_id": 1, "nome": "Jogador A", "posicao": "Atacante", "time_id": 1},
+            {"_id": 2, "nome": "Jogador B", "posicao": "Meio-campo", "time_id": 1},
+            {"_id": 3, "nome": "Jogador C", "posicao": "Defensor", "time_id": 2},
+            {"_id": 4, "nome": "Jogador D", "posicao": "Goleiro", "time_id": None}
+        ]
+        db.jogador.insert_many(jogadores)
 
-        cursor.executemany("""
-            INSERT INTO JOGADOR (nome, posicao, time_id) VALUES (%s, %s, %s)
-        """, [
-            ('Jogador A', 'Atacante', 1),
-            ('Jogador B', 'Meio-campo', 1),
-            ('Jogador C', 'Defensor', 2),
-            ('Jogador D', 'Goleiro', None)
-        ])
+        # Insert times de usuario
+        times_usuario = [
+            {"_id": 1, "nome": "Time do Edu", "usuario_id": 1},
+            {"_id": 2, "nome": "Time da Lari", "usuario_id": 2}
+        ]
+        db.time_usuario.insert_many(times_usuario)
 
-        cursor.executemany("""
-            INSERT INTO TIME_USUARIO (nome, usuario_id) VALUES (%s, %s)
-        """, [
-            ('Time do Edu', 1),
-            ('Time da Lari', 2)
-        ])
+        # Insert time_usuario_jogador
+        time_usuario_jogadores = [
+            {"_id": 1, "time_usuario_id": 1, "jogador_id": 1},
+            {"_id": 2, "time_usuario_id": 1, "jogador_id": 2},
+            {"_id": 3, "time_usuario_id": 1, "jogador_id": 4},
+            {"_id": 4, "time_usuario_id": 2, "jogador_id": 2},
+            {"_id": 5, "time_usuario_id": 2, "jogador_id": 3}
+        ]
+        db.time_usuario_jogador.insert_many(time_usuario_jogadores)
 
-        cursor.executemany("""
-            INSERT INTO TIME_USUARIO_JOGADOR (time_usuario_id, jogador_id) VALUES (%s, %s)
-        """, [
-            (1, 1), (1, 2), (1, 4),
-            (2, 2), (2, 3)
-        ])
-
-        conn.commit()
         print("✓ Dados de teste inseridos com sucesso\n")
 
     except Exception as e:
         print(f"✗ Erro ao inserir dados: {e}")
-        conn.rollback()
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 def execute_queries() -> None:
-    """Execute 5 read queries from script.sql"""
+    """Execute 5 read queries"""
     print("=== Executando consultas ===\n")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("USE futebol_app")
-
         print("Q1: Listar todos os jogadores com seus times oficiais\n")
-        cursor.execute("""
-            SELECT j.id, j.nome, j.posicao, t.nome AS time_oficial
-            FROM JOGADOR j
-            LEFT JOIN TIME_OFICIAL t ON t.id = j.time_id
-            ORDER BY t.nome IS NULL, t.nome, j.nome
-        """)
-        results = cursor.fetchall()
-        print_table(["ID", "Nome", "Posição", "Time Oficial"], results)
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_id",
+                    "foreignField": "_id",
+                    "as": "time"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$time",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$project": {
+                    "id": "$_id",
+                    "nome": 1,
+                    "posicao": 1,
+                    "time_oficial": {"$ifNull": ["$time.nome", None]}
+                }
+            },
+            {
+                "$sort": {"time_oficial": 1, "nome": 1}
+            }
+        ]
+        results = list(db.jogador.aggregate(pipeline))
+        formatted_results = [(r["id"], r["nome"], r["posicao"], r["time_oficial"]) for r in results]
+        print_table(["ID", "Nome", "Posição", "Time Oficial"], formatted_results)
 
         print("\n" + "="*80 + "\n")
         print("Q2: Listar times de usuários com seus jogadores\n")
-        cursor.execute("""
-            SELECT tu.nome AS time_usuario, u.nome AS dono, j.nome AS jogador, j.posicao
-            FROM TIME_USUARIO tu
-            JOIN USUARIO u ON u.id = tu.usuario_id
-            JOIN TIME_USUARIO_JOGADOR tuj ON tuj.time_usuario_id = tu.id
-            JOIN JOGADOR j ON j.id = tuj.jogador_id
-            ORDER BY time_usuario, jogador
-        """)
-        results = cursor.fetchall()
-        print_table(["Time do Usuário", "Dono", "Jogador", "Posição"], results)
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "usuario",
+                    "localField": "usuario_id",
+                    "foreignField": "_id",
+                    "as": "usuario"
+                }
+            },
+            {"$unwind": "$usuario"},
+            {
+                "$lookup": {
+                    "from": "time_usuario_jogador",
+                    "localField": "_id",
+                    "foreignField": "time_usuario_id",
+                    "as": "jogadores_rel"
+                }
+            },
+            {"$unwind": "$jogadores_rel"},
+            {
+                "$lookup": {
+                    "from": "jogador",
+                    "localField": "jogadores_rel.jogador_id",
+                    "foreignField": "_id",
+                    "as": "jogador"
+                }
+            },
+            {"$unwind": "$jogador"},
+            {
+                "$project": {
+                    "time_usuario": "$nome",
+                    "dono": "$usuario.nome",
+                    "jogador": "$jogador.nome",
+                    "posicao": "$jogador.posicao"
+                }
+            },
+            {
+                "$sort": {"time_usuario": 1, "jogador": 1}
+            }
+        ]
+        results = list(db.time_usuario.aggregate(pipeline))
+        formatted_results = [(r["time_usuario"], r["dono"], r["jogador"], r["posicao"]) for r in results]
+        print_table(["Time do Usuário", "Dono", "Jogador", "Posição"], formatted_results)
 
         print("\n" + "="*80 + "\n")
         print("Q3: Contar jogadores por posição em cada time oficial\n")
-        cursor.execute("""
-            SELECT t.nome AS time_oficial, j.posicao, COUNT(*) AS qtd
-            FROM JOGADOR j
-            JOIN TIME_OFICIAL t ON t.id = j.time_id
-            GROUP BY t.nome, j.posicao
-            ORDER BY t.nome, qtd DESC
-        """)
-        results = cursor.fetchall()
-        print_table(["Time Oficial", "Posição", "Quantidade"], results)
+        pipeline = [
+            {
+                "$match": {"time_id": {"$ne": None}}
+            },
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_id",
+                    "foreignField": "_id",
+                    "as": "time"
+                }
+            },
+            {"$unwind": "$time"},
+            {
+                "$group": {
+                    "_id": {
+                        "time_oficial": "$time.nome",
+                        "posicao": "$posicao"
+                    },
+                    "qtd": {"$sum": 1}
+                }
+            },
+            {
+                "$project": {
+                    "time_oficial": "$_id.time_oficial",
+                    "posicao": "$_id.posicao",
+                    "qtd": 1
+                }
+            },
+            {
+                "$sort": {"time_oficial": 1, "qtd": -1}
+            }
+        ]
+        results = list(db.jogador.aggregate(pipeline))
+        formatted_results = [(r["time_oficial"], r["posicao"], r["qtd"]) for r in results]
+        print_table(["Time Oficial", "Posição", "Quantidade"], formatted_results)
 
         print("\n" + "="*80 + "\n")
         print("Q4: Listar jogadores sem time oficial\n")
-        cursor.execute("""
-            SELECT j.id, j.nome, j.posicao
-            FROM JOGADOR j
-            WHERE j.time_id IS NULL
-        """)
-        results = cursor.fetchall()
-        print_table(["ID", "Nome", "Posição"], results)
+        results = list(db.jogador.find({"time_id": None}, {"_id": 1, "nome": 1, "posicao": 1}))
+        formatted_results = [(r["_id"], r["nome"], r["posicao"]) for r in results]
+        print_table(["ID", "Nome", "Posição"], formatted_results)
 
         print("\n" + "="*80 + "\n")
         print("Q5: Para um usuário específico, quantos jogadores do elenco dele pertencem ao seu 'time preferido'\n")
-        cursor.execute("""
-            SELECT u.nome AS usuario,
-                   u.time_preferido,
-                   COUNT(*) AS jogadores_do_time_preferido
-            FROM USUARIO u
-            JOIN TIME_USUARIO tu           ON tu.usuario_id = u.id
-            JOIN TIME_USUARIO_JOGADOR tuj  ON tuj.time_usuario_id = tu.id
-            JOIN JOGADOR j                 ON j.id = tuj.jogador_id
-            JOIN TIME_OFICIAL tofc         ON tofc.id = j.time_id
-            WHERE tofc.sigla = CASE
-                                 WHEN u.time_preferido='FURIA' THEN 'FUR'
-                                 WHEN u.time_preferido='LOUD'  THEN 'LOD'
-                                 ELSE tofc.sigla
-                               END
-            GROUP BY u.id, u.time_preferido
-        """)
-        results = cursor.fetchall()
-        print_table(["Usuário", "Time Preferido", "Jogadores do Time Preferido"], results)
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "time_usuario",
+                    "localField": "_id",
+                    "foreignField": "usuario_id",
+                    "as": "times"
+                }
+            },
+            {"$unwind": "$times"},
+            {
+                "$lookup": {
+                    "from": "time_usuario_jogador",
+                    "localField": "times._id",
+                    "foreignField": "time_usuario_id",
+                    "as": "jogadores_rel"
+                }
+            },
+            {"$unwind": "$jogadores_rel"},
+            {
+                "$lookup": {
+                    "from": "jogador",
+                    "localField": "jogadores_rel.jogador_id",
+                    "foreignField": "_id",
+                    "as": "jogador"
+                }
+            },
+            {"$unwind": "$jogador"},
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "jogador.time_id",
+                    "foreignField": "_id",
+                    "as": "time_oficial"
+                }
+            },
+            {"$unwind": "$time_oficial"},
+            {
+                "$addFields": {
+                    "sigla_preferida": {
+                        "$switch": {
+                            "branches": [
+                                {"case": {"$eq": ["$time_preferido", "FURIA"]}, "then": "FUR"},
+                                {"case": {"$eq": ["$time_preferido", "LOUD"]}, "then": "LOD"}
+                            ],
+                            "default": "$time_oficial.sigla"
+                        }
+                    }
+                }
+            },
+            {
+                "$match": {
+                    "$expr": {"$eq": ["$time_oficial.sigla", "$sigla_preferida"]}
+                }
+            },
+            {
+                "$group": {
+                    "_id": {
+                        "usuario": "$nome",
+                        "time_preferido": "$time_preferido"
+                    },
+                    "jogadores_do_time_preferido": {"$sum": 1}
+                }
+            },
+            {
+                "$project": {
+                    "usuario": "$_id.usuario",
+                    "time_preferido": "$_id.time_preferido",
+                    "jogadores_do_time_preferido": 1
+                }
+            }
+        ]
+        results = list(db.usuario.aggregate(pipeline))
+        formatted_results = [(r["usuario"], r["time_preferido"], r["jogadores_do_time_preferido"]) for r in results]
+        print_table(["Usuário", "Time Preferido", "Jogadores do Time Preferido"], formatted_results)
 
     except Exception as e:
         print(f"✗ Erro ao executar consultas: {e}")
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 def print_table(headers: List[str], rows: List[Tuple[Any, ...]]) -> None:
     """Print query results in a formatted table"""

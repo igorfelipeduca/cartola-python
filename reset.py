@@ -1,83 +1,55 @@
-import pymysql
-from pymysql import Connection
-from typing import Any
+from pymongo import MongoClient
+from pymongo.database import Database
 import sys
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is not set")
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI environment variable is not set")
 
-def parse_database_url(url: str) -> dict[str, Any]:
-    """Parse MySQL connection URL"""
-    url = url.replace("mysql://", "")
+def get_database() -> Database:
+    """Create MongoDB connection and return database"""
+    client = MongoClient(MONGODB_URI)
+    db_name = MONGODB_URI.split("/")[-1].split("?")[0]
+    if not db_name or db_name == "":
+        db_name = "futebol_app"
+    return client[db_name]
 
-    auth, host_port_db = url.split("@")
-    user, password = auth.split(":")
+def drop_all_collections() -> None:
+    """Drop all collections from the database"""
+    print("=== Dropando todas as coleções ===\n")
 
-    host_port, database = host_port_db.rsplit("/", 1)
-    host, port = host_port.split(":")
-
-    return {
-        "host": host,
-        "port": int(port),
-        "user": user,
-        "password": password,
-        "database": database
-    }
-
-def get_connection(use_database: bool = True) -> Connection:
-    """Create MySQL connection"""
-    config = parse_database_url(DATABASE_URL)
-
-    if not use_database:
-        config.pop("database")
-
-    return pymysql.connect(**config)
-
-def drop_all_tables() -> None:
-    """Drop all tables from the database"""
-    print("=== Dropando todas as tabelas ===\n")
-
-    conn = get_connection(use_database=False)
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("USE futebol_app")
+        db.time_usuario_jogador.drop()
+        print("✓ Coleção time_usuario_jogador dropada")
 
-        cursor.execute("DROP TABLE IF EXISTS TIME_USUARIO_JOGADOR")
-        print("✓ Tabela TIME_USUARIO_JOGADOR dropada")
+        db.time_usuario.drop()
+        print("✓ Coleção time_usuario dropada")
 
-        cursor.execute("DROP TABLE IF EXISTS TIME_USUARIO")
-        print("✓ Tabela TIME_USUARIO dropada")
+        db.jogador.drop()
+        print("✓ Coleção jogador dropada")
 
-        cursor.execute("DROP TABLE IF EXISTS JOGADOR")
-        print("✓ Tabela JOGADOR dropada")
+        db.time_oficial.drop()
+        print("✓ Coleção time_oficial dropada")
 
-        cursor.execute("DROP TABLE IF EXISTS TIME_OFICIAL")
-        print("✓ Tabela TIME_OFICIAL dropada")
+        db.usuario.drop()
+        print("✓ Coleção usuario dropada")
 
-        cursor.execute("DROP TABLE IF EXISTS USUARIO")
-        print("✓ Tabela USUARIO dropada")
-
-        conn.commit()
-        print("\n✓ Todas as tabelas foram dropadas com sucesso!")
+        print("\n✓ Todas as coleções foram dropadas com sucesso!")
 
     except Exception as e:
-        print(f"\n✗ Erro ao dropar tabelas: {e}")
-        conn.rollback()
+        print(f"\n✗ Erro ao dropar coleções: {e}")
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 def main() -> None:
     """Main function"""
     try:
-        drop_all_tables()
+        drop_all_collections()
     except Exception as e:
         print(f"\n✗ Erro fatal: {e}")
         sys.exit(1)
