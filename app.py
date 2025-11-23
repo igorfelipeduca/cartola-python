@@ -155,7 +155,7 @@ def cadastrar_usuario() -> None:
         db.usuario.insert_one(usuario)
         print(f"\n✅ Usuário '{nome}' cadastrado com sucesso! ID: {user_id}")
     except DuplicateKeyError:
-        print(f"\n❌ Erro: Email já cadastrado!")
+        print("\n❌ Erro: Email já cadastrado!")
     except Exception as e:
         print(f"\n❌ Erro ao cadastrar usuário: {e}")
 
@@ -389,6 +389,28 @@ def adicionar_jogador_time_usuario() -> None:
         wait_for_enter()
         return
 
+    # Verify that time_usuario exists
+    if not db.time_usuario.find_one({"_id": time_usuario_id}):
+        print(f"\n❌ Erro: Time de usuário ID {time_usuario_id} não existe!")
+        wait_for_enter()
+        return
+
+    # Verify that jogador exists
+    if not db.jogador.find_one({"_id": jogador_id}):
+        print(f"\n❌ Erro: Jogador ID {jogador_id} não existe!")
+        wait_for_enter()
+        return
+
+    # Check if the relationship already exists
+    existing = db.time_usuario_jogador.find_one({
+        "time_usuario_id": time_usuario_id,
+        "jogador_id": jogador_id
+    })
+    if existing:
+        print("\n❌ Erro: Este jogador já está neste time!")
+        wait_for_enter()
+        return
+
     try:
         tuj_id = get_next_id(db, "time_usuario_jogador")
         tuj = {
@@ -397,9 +419,7 @@ def adicionar_jogador_time_usuario() -> None:
             "jogador_id": jogador_id
         }
         db.time_usuario_jogador.insert_one(tuj)
-        print(f"\n✅ Jogador adicionado ao time com sucesso!")
-    except DuplicateKeyError:
-        print(f"\n❌ Erro: Jogador já está neste time!")
+        print("\n✅ Jogador adicionado ao time com sucesso!")
     except Exception as e:
         print(f"\n❌ Erro ao adicionar jogador: {e}")
 
