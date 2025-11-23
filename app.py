@@ -693,21 +693,22 @@ def consulta_jogadores_time_preferido() -> None:
             },
             {"$unwind": "$time_oficial"},
             {
-                "$addFields": {
-                    "sigla_preferida": {
-                        "$switch": {
-                            "branches": [
-                                {"case": {"$eq": ["$time_preferido", "FURIA"]}, "then": "FUR"},
-                                {"case": {"$eq": ["$time_preferido", "LOUD"]}, "then": "LOD"}
-                            ],
-                            "default": "$time_oficial.sigla"
-                        }
-                    }
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_preferido",
+                    "foreignField": "nome_curto",
+                    "as": "time_preferido_obj"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$time_preferido_obj",
+                    "preserveNullAndEmptyArrays": True
                 }
             },
             {
                 "$match": {
-                    "$expr": {"$eq": ["$time_oficial.sigla", "$sigla_preferida"]}
+                    "$expr": {"$eq": ["$time_oficial.sigla", "$time_preferido_obj.sigla"]}
                 }
             },
             {

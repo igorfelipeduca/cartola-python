@@ -103,8 +103,8 @@ def insert_test_data() -> None:
 
         # Insert times oficiais
         times_oficiais = [
-            {"_id": 1, "nome": "Furia Esports", "sigla": "FUR"},
-            {"_id": 2, "nome": "LOUD", "sigla": "LOD"}
+            {"_id": 1, "nome": "Furia Esports", "sigla": "FUR", "nome_curto": "FURIA"},
+            {"_id": 2, "nome": "LOUD", "sigla": "LOD", "nome_curto": "LOUD"}
         ]
         db.time_oficial.insert_many(times_oficiais)
 
@@ -310,21 +310,22 @@ def execute_queries() -> None:
             },
             {"$unwind": "$time_oficial"},
             {
-                "$addFields": {
-                    "sigla_preferida": {
-                        "$switch": {
-                            "branches": [
-                                {"case": {"$eq": ["$time_preferido", "FURIA"]}, "then": "FUR"},
-                                {"case": {"$eq": ["$time_preferido", "LOUD"]}, "then": "LOD"}
-                            ],
-                            "default": "$time_oficial.sigla"
-                        }
-                    }
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_preferido",
+                    "foreignField": "nome_curto",
+                    "as": "time_preferido_obj"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$time_preferido_obj",
+                    "preserveNullAndEmptyArrays": True
                 }
             },
             {
                 "$match": {
-                    "$expr": {"$eq": ["$time_oficial.sigla", "$sigla_preferida"]}
+                    "$expr": {"$eq": ["$time_oficial.sigla", "$time_preferido_obj.sigla"]}
                 }
             },
             {
