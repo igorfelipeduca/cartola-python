@@ -1,5 +1,6 @@
-import pymysql
-from pymysql import Connection
+from pymongo import MongoClient, ASCENDING
+from pymongo.database import Database
+from pymongo.errors import DuplicateKeyError
 from typing import List, Tuple, Any, Optional
 import sys
 from datetime import datetime
@@ -8,34 +9,42 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is not set")
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI environment variable is not set")
 
-def parse_database_url(url: str) -> dict[str, Any]:
-    """Parse MySQL connection URL"""
-    url = url.replace("mysql://", "")
-    auth, host_port_db = url.split("@")
-    user, password = auth.split(":")
-    host_port, database = host_port_db.rsplit("/", 1)
-    host, port = host_port.split(":")
+# Global variables for connection management
+_client: MongoClient = None
+_database: Database = None
 
-    return {
-        "host": host,
-        "port": int(port),
-        "user": user,
-        "password": password,
-        "database": database
-    }
+def get_database() -> Database:
+    """Get MongoDB database (singleton pattern)"""
+    global _client, _database
 
-def get_connection() -> Connection:
-    """Create MySQL connection"""
-    config = parse_database_url(DATABASE_URL)
-    conn = pymysql.connect(**config)
-    cursor = conn.cursor()
-    cursor.execute("USE futebol_app")
-    cursor.close()
-    return conn
+    if _database is None:
+        _client = MongoClient(MONGODB_URI)
+        db_name = MONGODB_URI.split("/")[-1].split("?")[0]
+        if not db_name or db_name == "":
+            db_name = "futebol_app"
+        _database = _client[db_name]
+
+    return _database
+
+def close_database() -> None:
+    """Close MongoDB connection"""
+    global _client, _database
+
+    if _client is not None:
+        _client.close()
+        _client = None
+        _database = None
+
+def get_next_id(db: Database, collection_name: str) -> int:
+    """Get next auto-increment ID for a collection"""
+    result = db[collection_name].find_one(sort=[("_id", -1)])
+    if result:
+        return result["_id"] + 1
+    return 1
 
 def clear_screen() -> None:
     """Clear terminal screen"""
@@ -129,24 +138,26 @@ def cadastrar_usuario() -> None:
     time_preferido = input("Time preferido (opcional, pressione ENTER para pular): ").strip()
     time_preferido = time_preferido if time_preferido else None
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            INSERT INTO USUARIO (nome, email, senha, sexo, telefone, data_nascimento, time_preferido)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (nome, email, senha, sexo, telefone, data_nascimento, time_preferido))
-        conn.commit()
-        print(f"\n✅ Usuário '{nome}' cadastrado com sucesso! ID: {cursor.lastrowid}")
-    except pymysql.IntegrityError as e:
-        print(f"\n❌ Erro: Email já cadastrado!")
+        user_id = get_next_id(db, "usuario")
+        usuario = {
+            "_id": user_id,
+            "nome": nome,
+            "email": email,
+            "senha": senha,
+            "sexo": sexo,
+            "telefone": telefone,
+            "data_nascimento": data_nascimento,
+            "time_preferido": time_preferido
+        }
+        db.usuario.insert_one(usuario)
+        print(f"\n✅ Usuário '{nome}' cadastrado com sucesso! ID: {user_id}")
+    except DuplicateKeyError:
+        print("\n❌ Erro: Email já cadastrado!")
     except Exception as e:
         print(f"\n❌ Erro ao cadastrar usuário: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -166,24 +177,21 @@ def cadastrar_time_oficial() -> None:
         wait_for_enter()
         return
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            INSERT INTO TIME_OFICIAL (nome, sigla)
-            VALUES (%s, %s)
-        """, (nome, sigla))
-        conn.commit()
-        print(f"\n✅ Time '{nome}' cadastrado com sucesso! ID: {cursor.lastrowid}")
-    except pymysql.IntegrityError:
+        time_id = get_next_id(db, "time_oficial")
+        time_oficial = {
+            "_id": time_id,
+            "nome": nome,
+            "sigla": sigla
+        }
+        db.time_oficial.insert_one(time_oficial)
+        print(f"\n✅ Time '{nome}' cadastrado com sucesso! ID: {time_id}")
+    except DuplicateKeyError:
         print(f"\n❌ Erro: Sigla '{sigla}' já cadastrada!")
     except Exception as e:
         print(f"\n❌ Erro ao cadastrar time: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -191,32 +199,26 @@ def cadastrar_jogador() -> None:
     """Register player"""
     print_header("Cadastro de Jogador")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
-    cursor.execute("SELECT id, nome, sigla FROM TIME_OFICIAL ORDER BY nome")
-    times = cursor.fetchall()
+    times = list(db.time_oficial.find({}, {"_id": 1, "nome": 1, "sigla": 1}).sort("nome", ASCENDING))
 
     if times:
         print("Times disponíveis:")
         for time in times:
-            print(f"  {time[0]} - {time[1]} ({time[2]})")
+            print(f"  {time['_id']} - {time['nome']} ({time['sigla']})")
         print("  0 - Sem time (jogador livre)")
         print()
 
     nome = input("Nome do jogador: ").strip()
     if not nome:
         print("❌ Nome é obrigatório!")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
     posicao = input("Posição (ex: Atacante, Goleiro, Meio-campo, Defensor): ").strip()
     if not posicao:
         print("❌ Posição é obrigatória!")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
@@ -228,24 +230,21 @@ def cadastrar_jogador() -> None:
             time_id = int(time_id_input)
         except ValueError:
             print("❌ ID inválido!")
-            cursor.close()
-            conn.close()
             wait_for_enter()
             return
 
     try:
-        cursor.execute("""
-            INSERT INTO JOGADOR (nome, posicao, time_id)
-            VALUES (%s, %s, %s)
-        """, (nome, posicao, time_id))
-        conn.commit()
-        print(f"\n✅ Jogador '{nome}' cadastrado com sucesso! ID: {cursor.lastrowid}")
+        jogador_id = get_next_id(db, "jogador")
+        jogador = {
+            "_id": jogador_id,
+            "nome": nome,
+            "posicao": posicao,
+            "time_id": time_id
+        }
+        db.jogador.insert_one(jogador)
+        print(f"\n✅ Jogador '{nome}' cadastrado com sucesso! ID: {jogador_id}")
     except Exception as e:
         print(f"\n❌ Erro ao cadastrar jogador: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -253,22 +252,18 @@ def criar_time_usuario() -> None:
     """Create user team"""
     print_header("Criar Time de Usuário")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
-    cursor.execute("SELECT id, nome, email FROM USUARIO ORDER BY nome")
-    usuarios = cursor.fetchall()
+    usuarios = list(db.usuario.find({}, {"_id": 1, "nome": 1, "email": 1}).sort("nome", ASCENDING))
 
     if not usuarios:
         print("❌ Nenhum usuário cadastrado! Cadastre um usuário primeiro.")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
     print("Usuários disponíveis:")
     for usuario in usuarios:
-        print(f"  {usuario[0]} - {usuario[1]} ({usuario[2]})")
+        print(f"  {usuario['_id']} - {usuario['nome']} ({usuario['email']})")
     print()
 
     usuario_id_input = input("ID do usuário dono do time: ").strip()
@@ -276,34 +271,30 @@ def criar_time_usuario() -> None:
         usuario_id = int(usuario_id_input)
     except ValueError:
         print("❌ ID inválido!")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
     nome_time = input("Nome do time: ").strip()
     if not nome_time:
         print("❌ Nome é obrigatório!")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
     try:
-        cursor.execute("""
-            INSERT INTO TIME_USUARIO (nome, usuario_id)
-            VALUES (%s, %s)
-        """, (nome_time, usuario_id))
-        conn.commit()
-        print(f"\n✅ Time '{nome_time}' criado com sucesso! ID: {cursor.lastrowid}")
-    except pymysql.IntegrityError:
-        print(f"\n❌ Erro: Usuário ID {usuario_id} não existe!")
+        # Check if user exists
+        if not db.usuario.find_one({"_id": usuario_id}):
+            print(f"\n❌ Erro: Usuário ID {usuario_id} não existe!")
+        else:
+            time_usuario_id = get_next_id(db, "time_usuario")
+            time_usuario = {
+                "_id": time_usuario_id,
+                "nome": nome_time,
+                "usuario_id": usuario_id
+            }
+            db.time_usuario.insert_one(time_usuario)
+            print(f"\n✅ Time '{nome_time}' criado com sucesso! ID: {time_usuario_id}")
     except Exception as e:
         print(f"\n❌ Erro ao criar time: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -311,27 +302,37 @@ def adicionar_jogador_time_usuario() -> None:
     """Add player to user team"""
     print_header("Adicionar Jogador ao Time de Usuário")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
-    cursor.execute("""
-        SELECT tu.id, tu.nome, u.nome
-        FROM TIME_USUARIO tu
-        JOIN USUARIO u ON u.id = tu.usuario_id
-        ORDER BY tu.nome
-    """)
-    times = cursor.fetchall()
+    pipeline = [
+        {
+            "$lookup": {
+                "from": "usuario",
+                "localField": "usuario_id",
+                "foreignField": "_id",
+                "as": "usuario"
+            }
+        },
+        {"$unwind": "$usuario"},
+        {
+            "$project": {
+                "_id": 1,
+                "nome": 1,
+                "dono": "$usuario.nome"
+            }
+        },
+        {"$sort": {"nome": 1}}
+    ]
+    times = list(db.time_usuario.aggregate(pipeline))
 
     if not times:
         print("❌ Nenhum time de usuário cadastrado! Crie um time primeiro.")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
     print("Times de usuário disponíveis:")
     for time in times:
-        print(f"  {time[0]} - {time[1]} (Dono: {time[2]})")
+        print(f"  {time['_id']} - {time['nome']} (Dono: {time['dono']})")
     print()
 
     time_usuario_id_input = input("ID do time de usuário: ").strip()
@@ -339,30 +340,45 @@ def adicionar_jogador_time_usuario() -> None:
         time_usuario_id = int(time_usuario_id_input)
     except ValueError:
         print("❌ ID inválido!")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
-    cursor.execute("""
-        SELECT j.id, j.nome, j.posicao, t.nome AS time_oficial
-        FROM JOGADOR j
-        LEFT JOIN TIME_OFICIAL t ON t.id = j.time_id
-        ORDER BY j.nome
-    """)
-    jogadores = cursor.fetchall()
+    pipeline = [
+        {
+            "$lookup": {
+                "from": "time_oficial",
+                "localField": "time_id",
+                "foreignField": "_id",
+                "as": "time"
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$time",
+                "preserveNullAndEmptyArrays": True
+            }
+        },
+        {
+            "$project": {
+                "_id": 1,
+                "nome": 1,
+                "posicao": 1,
+                "time_oficial": {"$ifNull": ["$time.nome", None]}
+            }
+        },
+        {"$sort": {"nome": 1}}
+    ]
+    jogadores = list(db.jogador.aggregate(pipeline))
 
     if not jogadores:
         print("❌ Nenhum jogador cadastrado!")
-        cursor.close()
-        conn.close()
         wait_for_enter()
         return
 
     print("\nJogadores disponíveis:")
     for jogador in jogadores:
-        time_nome = jogador[3] if jogador[3] else "Livre"
-        print(f"  {jogador[0]} - {jogador[1]} ({jogador[2]}) - Time: {time_nome}")
+        time_nome = jogador['time_oficial'] if jogador['time_oficial'] else "Livre"
+        print(f"  {jogador['_id']} - {jogador['nome']} ({jogador['posicao']}) - Time: {time_nome}")
     print()
 
     jogador_id_input = input("ID do jogador: ").strip()
@@ -370,26 +386,42 @@ def adicionar_jogador_time_usuario() -> None:
         jogador_id = int(jogador_id_input)
     except ValueError:
         print("❌ ID inválido!")
-        cursor.close()
-        conn.close()
+        wait_for_enter()
+        return
+
+    # Verify that time_usuario exists
+    if not db.time_usuario.find_one({"_id": time_usuario_id}):
+        print(f"\n❌ Erro: Time de usuário ID {time_usuario_id} não existe!")
+        wait_for_enter()
+        return
+
+    # Verify that jogador exists
+    if not db.jogador.find_one({"_id": jogador_id}):
+        print(f"\n❌ Erro: Jogador ID {jogador_id} não existe!")
+        wait_for_enter()
+        return
+
+    # Check if the relationship already exists
+    existing = db.time_usuario_jogador.find_one({
+        "time_usuario_id": time_usuario_id,
+        "jogador_id": jogador_id
+    })
+    if existing:
+        print("\n❌ Erro: Este jogador já está neste time!")
         wait_for_enter()
         return
 
     try:
-        cursor.execute("""
-            INSERT INTO TIME_USUARIO_JOGADOR (time_usuario_id, jogador_id)
-            VALUES (%s, %s)
-        """, (time_usuario_id, jogador_id))
-        conn.commit()
-        print(f"\n✅ Jogador adicionado ao time com sucesso!")
-    except pymysql.IntegrityError:
-        print(f"\n❌ Erro: Jogador já está neste time ou IDs inválidos!")
+        tuj_id = get_next_id(db, "time_usuario_jogador")
+        tuj = {
+            "_id": tuj_id,
+            "time_usuario_id": time_usuario_id,
+            "jogador_id": jogador_id
+        }
+        db.time_usuario_jogador.insert_one(tuj)
+        print("\n✅ Jogador adicionado ao time com sucesso!")
     except Exception as e:
         print(f"\n❌ Erro ao adicionar jogador: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -397,22 +429,17 @@ def listar_usuarios() -> None:
     """List all users"""
     print_header("Lista de Usuários")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT id, nome, email, sexo, telefone, data_nascimento, time_preferido
-            FROM USUARIO
-            ORDER BY nome
-        """)
-        results = cursor.fetchall()
+        usuarios = list(db.usuario.find({}).sort("nome", ASCENDING))
+        results = [
+            (u["_id"], u["nome"], u["email"], u["sexo"], u.get("telefone"), u["data_nascimento"], u.get("time_preferido"))
+            for u in usuarios
+        ]
         print_table(["ID", "Nome", "Email", "Sexo", "Telefone", "Nascimento", "Time Preferido"], results)
     except Exception as e:
         print(f"❌ Erro ao listar usuários: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -420,22 +447,14 @@ def listar_times_oficiais() -> None:
     """List all official teams"""
     print_header("Lista de Times Oficiais")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT id, nome, sigla
-            FROM TIME_OFICIAL
-            ORDER BY nome
-        """)
-        results = cursor.fetchall()
+        times = list(db.time_oficial.find({}).sort("nome", ASCENDING))
+        results = [(t["_id"], t["nome"], t["sigla"]) for t in times]
         print_table(["ID", "Nome", "Sigla"], results)
     except Exception as e:
         print(f"❌ Erro ao listar times: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -443,23 +462,39 @@ def listar_jogadores() -> None:
     """List all players"""
     print_header("Lista de Jogadores")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT j.id, j.nome, j.posicao, t.nome AS time_oficial
-            FROM JOGADOR j
-            LEFT JOIN TIME_OFICIAL t ON t.id = j.time_id
-            ORDER BY j.nome
-        """)
-        results = cursor.fetchall()
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_id",
+                    "foreignField": "_id",
+                    "as": "time"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$time",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$project": {
+                    "_id": 1,
+                    "nome": 1,
+                    "posicao": 1,
+                    "time_oficial": {"$ifNull": ["$time.nome", None]}
+                }
+            },
+            {"$sort": {"nome": 1}}
+        ]
+        jogadores = list(db.jogador.aggregate(pipeline))
+        results = [(j["_id"], j["nome"], j["posicao"], j["time_oficial"]) for j in jogadores]
         print_table(["ID", "Nome", "Posição", "Time Oficial"], results)
     except Exception as e:
         print(f"❌ Erro ao listar jogadores: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -467,25 +502,62 @@ def listar_times_usuario() -> None:
     """List all user teams with their players"""
     print_header("Times de Usuário e Seus Jogadores")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT tu.nome AS time_usuario, u.nome AS dono, j.nome AS jogador, j.posicao
-            FROM TIME_USUARIO tu
-            JOIN USUARIO u ON u.id = tu.usuario_id
-            LEFT JOIN TIME_USUARIO_JOGADOR tuj ON tuj.time_usuario_id = tu.id
-            LEFT JOIN JOGADOR j ON j.id = tuj.jogador_id
-            ORDER BY tu.nome, j.nome
-        """)
-        results = cursor.fetchall()
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "usuario",
+                    "localField": "usuario_id",
+                    "foreignField": "_id",
+                    "as": "usuario"
+                }
+            },
+            {"$unwind": "$usuario"},
+            {
+                "$lookup": {
+                    "from": "time_usuario_jogador",
+                    "localField": "_id",
+                    "foreignField": "time_usuario_id",
+                    "as": "jogadores_rel"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$jogadores_rel",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "jogador",
+                    "localField": "jogadores_rel.jogador_id",
+                    "foreignField": "_id",
+                    "as": "jogador"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$jogador",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$project": {
+                    "time_usuario": "$nome",
+                    "dono": "$usuario.nome",
+                    "jogador": {"$ifNull": ["$jogador.nome", None]},
+                    "posicao": {"$ifNull": ["$jogador.posicao", None]}
+                }
+            },
+            {"$sort": {"time_usuario": 1, "jogador": 1}}
+        ]
+        results_data = list(db.time_usuario.aggregate(pipeline))
+        results = [(r["time_usuario"], r["dono"], r["jogador"], r["posicao"]) for r in results_data]
         print_table(["Time do Usuário", "Dono", "Jogador", "Posição"], results)
     except Exception as e:
         print(f"❌ Erro ao listar times de usuário: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -517,24 +589,47 @@ def consulta_jogadores_por_posicao() -> None:
     """Query players by position in each official team"""
     print_header("Jogadores por Posição em Cada Time Oficial")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT t.nome AS time_oficial, j.posicao, COUNT(*) AS qtd
-            FROM JOGADOR j
-            JOIN TIME_OFICIAL t ON t.id = j.time_id
-            GROUP BY t.nome, j.posicao
-            ORDER BY t.nome, qtd DESC
-        """)
-        results = cursor.fetchall()
+        pipeline = [
+            {
+                "$match": {"time_id": {"$ne": None}}
+            },
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_id",
+                    "foreignField": "_id",
+                    "as": "time"
+                }
+            },
+            {"$unwind": "$time"},
+            {
+                "$group": {
+                    "_id": {
+                        "time_oficial": "$time.nome",
+                        "posicao": "$posicao"
+                    },
+                    "qtd": {"$sum": 1}
+                }
+            },
+            {
+                "$project": {
+                    "time_oficial": "$_id.time_oficial",
+                    "posicao": "$_id.posicao",
+                    "qtd": 1
+                }
+            },
+            {
+                "$sort": {"time_oficial": 1, "qtd": -1}
+            }
+        ]
+        results_data = list(db.jogador.aggregate(pipeline))
+        results = [(r["time_oficial"], r["posicao"], r["qtd"]) for r in results_data]
         print_table(["Time Oficial", "Posição", "Quantidade"], results)
     except Exception as e:
         print(f"❌ Erro ao executar consulta: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -542,22 +637,14 @@ def consulta_jogadores_sem_time() -> None:
     """Query players without an official team"""
     print_header("Jogadores Sem Time Oficial")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT j.id, j.nome, j.posicao
-            FROM JOGADOR j
-            WHERE j.time_id IS NULL
-        """)
-        results = cursor.fetchall()
+        jogadores = list(db.jogador.find({"time_id": None}, {"_id": 1, "nome": 1, "posicao": 1}))
+        results = [(j["_id"], j["nome"], j["posicao"]) for j in jogadores]
         print_table(["ID", "Nome", "Posição"], results)
     except Exception as e:
         print(f"❌ Erro ao executar consulta: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -565,33 +652,87 @@ def consulta_jogadores_time_preferido() -> None:
     """Query players from preferred team in user teams"""
     print_header("Para um usuário específico, quantos jogadores do elenco dele pertencem ao seu 'time preferido'")
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_database()
 
     try:
-        cursor.execute("""
-            SELECT u.nome AS usuario,
-                   u.time_preferido,
-                   COUNT(*) AS jogadores_do_time_preferido
-            FROM USUARIO u
-            JOIN TIME_USUARIO tu           ON tu.usuario_id = u.id
-            JOIN TIME_USUARIO_JOGADOR tuj  ON tuj.time_usuario_id = tu.id
-            JOIN JOGADOR j                 ON j.id = tuj.jogador_id
-            JOIN TIME_OFICIAL tofc         ON tofc.id = j.time_id
-            WHERE tofc.sigla = CASE
-                                 WHEN u.time_preferido='FURIA' THEN 'FUR'
-                                 WHEN u.time_preferido='LOUD'  THEN 'LOD'
-                                 ELSE tofc.sigla
-                               END
-            GROUP BY u.id, u.time_preferido
-        """)
-        results = cursor.fetchall()
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "time_usuario",
+                    "localField": "_id",
+                    "foreignField": "usuario_id",
+                    "as": "times"
+                }
+            },
+            {"$unwind": "$times"},
+            {
+                "$lookup": {
+                    "from": "time_usuario_jogador",
+                    "localField": "times._id",
+                    "foreignField": "time_usuario_id",
+                    "as": "jogadores_rel"
+                }
+            },
+            {"$unwind": "$jogadores_rel"},
+            {
+                "$lookup": {
+                    "from": "jogador",
+                    "localField": "jogadores_rel.jogador_id",
+                    "foreignField": "_id",
+                    "as": "jogador"
+                }
+            },
+            {"$unwind": "$jogador"},
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "jogador.time_id",
+                    "foreignField": "_id",
+                    "as": "time_oficial"
+                }
+            },
+            {"$unwind": "$time_oficial"},
+            {
+                "$lookup": {
+                    "from": "time_oficial",
+                    "localField": "time_preferido",
+                    "foreignField": "nome_curto",
+                    "as": "time_preferido_obj"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$time_preferido_obj",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$match": {
+                    "$expr": {"$eq": ["$time_oficial.sigla", "$time_preferido_obj.sigla"]}
+                }
+            },
+            {
+                "$group": {
+                    "_id": {
+                        "usuario": "$nome",
+                        "time_preferido": "$time_preferido"
+                    },
+                    "jogadores_do_time_preferido": {"$sum": 1}
+                }
+            },
+            {
+                "$project": {
+                    "usuario": "$_id.usuario",
+                    "time_preferido": "$_id.time_preferido",
+                    "jogadores_do_time_preferido": 1
+                }
+            }
+        ]
+        results_data = list(db.usuario.aggregate(pipeline))
+        results = [(r["usuario"], r["time_preferido"], r["jogadores_do_time_preferido"]) for r in results_data]
         print_table(["Usuário", "Time Preferido", "Jogadores do Time Preferido"], results)
     except Exception as e:
         print(f"❌ Erro ao executar consulta: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
     wait_for_enter()
 
@@ -672,6 +813,7 @@ def menu_principal() -> None:
             menu_consultas()
         elif opcao == "0":
             print("\n👋 Até logo!")
+            close_database()
             sys.exit(0)
         else:
             print("❌ Opção inválida!")
@@ -687,6 +829,8 @@ def main() -> None:
     except Exception as e:
         print(f"\n❌ Erro fatal: {e}")
         sys.exit(1)
+    finally:
+        close_database()
 
 if __name__ == "__main__":
     main()
